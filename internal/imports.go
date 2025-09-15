@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sqlc-dev/sqlc-gen-go/internal/opts"
 	"github.com/sqlc-dev/plugin-sdk-go/metadata"
+	"github.com/sqlc-dev/sqlc-gen-go/internal/opts"
 )
 
 type fileImports struct {
@@ -309,6 +309,7 @@ func (i *importer) queryImports(filename string) fileImports {
 				anyNonCopyFrom = true
 			}
 		}
+
 	}
 
 	std, pkg := buildImports(i.Options, gq, func(name string) bool {
@@ -342,6 +343,14 @@ func (i *importer) queryImports(filename string) fileImports {
 		}
 		return false
 	})
+
+	for _, q := range gq {
+		if q.IsDynamic && q.SourceName == filename {
+			pkg[ImportSpec{Path: "github.com/Masterminds/squirrel"}] = struct{}{}
+			pkg[ImportSpec{Path: "as-pl.com/common/db/dynamic"}] = struct{}{}
+			//xx 112344343343233333333333333
+		}
+	}
 
 	sliceScan := func() bool {
 		for _, q := range gq {

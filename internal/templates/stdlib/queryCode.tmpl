@@ -19,6 +19,9 @@ type {{.Ret.Type}} struct { {{- range .Ret.Struct.Fields}}
 }
 {{end}}
 
+
+
+
 {{if eq .Cmd ":one"}}
 {{range .Comments}}//{{.}}
 {{end -}}
@@ -62,6 +65,23 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{ dbarg }} {{.Arg.Pair}}
     return items, nil
 }
 {{end}}
+
+{{if eq .IsDynamic true}}
+func (q *Queries) {{.MethodName}}Dynamic(ctx context.Context, conditions *squirrel.SelectBuilder, {{ dbarg }} {{.Arg.Pair}}) ([]{{.Ret.DefineType}}, error) {
+	rows, err := dynamic.DynamicQuery[ {{if ne .Arg.Name ""}}{{.Arg.Type}}{{else}}struct{}{{end}} , {{.Ret.DefineType}}](
+		ctx,
+		q.db.(*sql.DB),
+		{{.MethodName}},
+        {{if ne .Arg.Name ""}}&{{.Arg.Name}}{{else}}&struct{}{}{{end}}, 
+		conditions,
+	)
+	if err != nil {
+		return []{{.Ret.DefineType}}{}, err
+	}
+	return rows, nil
+}
+{{end -}}
+
 
 {{if eq .Cmd ":exec"}}
 {{range .Comments}}//{{.}}

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sqlc-dev/sqlc-gen-go/internal/opts"
 	"github.com/sqlc-dev/plugin-sdk-go/metadata"
 	"github.com/sqlc-dev/plugin-sdk-go/plugin"
+	"github.com/sqlc-dev/sqlc-gen-go/internal/opts"
 )
 
 type QueryValue struct {
@@ -265,6 +265,7 @@ type Query struct {
 	SourceName   string
 	Ret          QueryValue
 	Arg          QueryValue
+	IsDynamic    bool
 	// Used for :copyfrom
 	Table *plugin.Identifier
 }

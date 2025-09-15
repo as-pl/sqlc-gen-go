@@ -227,6 +227,7 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 			SQL:          query.Text,
 			Comments:     comments,
 			Table:        query.InsertIntoTable,
+			IsDynamic:    strings.Contains(query.Text, "-- conditions --"),
 		}
 		sqlpkg := parseDriver(options.SqlPackage)
 
@@ -362,7 +363,9 @@ func columnsToStruct(req *plugin.GenerateRequest, query *plugin.Query, options *
 
 	columnAliasSchema, err2 := parse(query.GetText())
 	if err2 != nil {
-		return nil, err2
+		//return nil, err2
+		//do nothing, we don't have alias info
+		//fmt.Println("Warning: cannot parse query for column aliases:", err2)
 	}
 	for i, c := range columns {
 		colName := columnName(c.Column, i)
