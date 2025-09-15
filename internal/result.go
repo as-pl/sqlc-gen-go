@@ -390,7 +390,7 @@ func columnsToStruct(req *plugin.GenerateRequest, options *opts.Options, name st
 			tags["json"] = JSONTagName(tagName, options)
 		}
 
-		tags["col_real_name"] = "table."+tagName
+		tags["col_real_name"] = "table."+tagName+"." + fieldName
 
 		addExtraGoStructTags(tags, req, options, c.Column)
 		f := Field{
