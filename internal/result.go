@@ -6,11 +6,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sqlc-dev/sqlc-gen-go/internal/opts"
-	"github.com/sqlc-dev/plugin-sdk-go/sdk"
-	"github.com/sqlc-dev/sqlc-gen-go/internal/inflection"
 	"github.com/sqlc-dev/plugin-sdk-go/metadata"
 	"github.com/sqlc-dev/plugin-sdk-go/plugin"
+	"github.com/sqlc-dev/plugin-sdk-go/sdk"
+	"github.com/sqlc-dev/sqlc-gen-go/internal/inflection"
+	"github.com/sqlc-dev/sqlc-gen-go/internal/opts"
+	"github.com/xwb1989/sqlparser"
 )
 
 func buildEnums(req *plugin.GenerateRequest, options *opts.Options) []Enum {
@@ -93,6 +94,7 @@ func buildStructs(req *plugin.GenerateRequest, options *opts.Options) []Struct {
 				if options.EmitJsonTags {
 					tags["json"] = JSONTagName(column.Name, options)
 				}
+				tags["col_real_name"] = "table." + column.Name + "." + StructName(column.Name, options)
 				addExtraGoStructTags(tags, req, options, column)
 				s.Fields = append(s.Fields, Field{
 					Name:    StructName(column.Name, options),
@@ -247,7 +249,7 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 					Column: p.Column,
 				})
 			}
-			s, err := columnsToStruct(req, options, gq.MethodName+"Params", cols, false)
+			s, err := columnsToStruct(req, query, options, gq.MethodName+"Params", cols, false)
 			if err != nil {
 				return nil, err
 			}
@@ -310,7 +312,7 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 					})
 				}
 				var err error
-				gs, err = columnsToStruct(req, options, gq.MethodName+"Row", columns, true)
+				gs, err = columnsToStruct(req, query, options, gq.MethodName+"Row", columns, true)
 				if err != nil {
 					return nil, err
 				}
@@ -351,12 +353,17 @@ func putOutColumns(query *plugin.Query) bool {
 // JSON tags: count, count_2, count_2
 //
 // This is unlikely to happen, so don't fix it yet
-func columnsToStruct(req *plugin.GenerateRequest, options *opts.Options, name string, columns []goColumn, useID bool) (*Struct, error) {
+func columnsToStruct(req *plugin.GenerateRequest, query *plugin.Query, options *opts.Options, name string, columns []goColumn, useID bool) (*Struct, error) {
 	gs := Struct{
 		Name: name,
 	}
 	seen := map[string][]int{}
 	suffixes := map[int]int{}
+
+	columnAliasSchema, err2 := parse(query.GetText())
+	if err2 != nil {
+		return nil, err2
+	}
 	for i, c := range columns {
 		colName := columnName(c.Column, i)
 		tagName := colName
@@ -390,7 +397,19 @@ func columnsToStruct(req *plugin.GenerateRequest, options *opts.Options, name st
 			tags["json"] = JSONTagName(tagName, options)
 		}
 
-		tags["col_real_name"] = "table."+tagName+"." + fieldName
+		//fmt.Println(c)
+		alias := ""
+
+		for _, col := range columnAliasSchema {
+			if col.ColumnName == c.GetOriginalName() && (col.ColumnAlias == "" || col.ColumnAlias == c.GetName()) && col.TableAlias != "" {
+				alias = col.TableAlias
+			}
+		}
+
+		tags["real_name"] = c.GetOriginalName()
+		if alias != "" {
+			tags["real_name"] = alias + "." + c.GetOriginalName()
+		}
 
 		addExtraGoStructTags(tags, req, options, c.Column)
 		f := Field{
@@ -450,4 +469,112 @@ func checkIncompatibleFieldTypes(fields []Field) error {
 		}
 	}
 	return nil
+}
+
+func parse(query string) ([]ColumnMapping, error) {
+
+	stmtRaw, err := sqlparser.Parse(query)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt, ok := stmtRaw.(*sqlparser.Select)
+	if !ok {
+		return nil, fmt.Errorf("not a SELECT statement")
+	}
+
+	// tables, err := extractTableAliases(stmt)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// f, err := os.Create("/home/artur/projects/as-pl-monorepo/tmp-gen-go/tmp.txt")
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// defer f.Close()
+
+	//w := bufio.NewWriter(f)
+	//fmt.Fprintln(w, "Table aliases:")
+	// for _, t := range tables {
+	// 	fmt.Fprintf(w, "Alias: %s  → Table: %s\n", t.Alias, t.TableName)
+	// }
+
+	cols, err := extractColumnMappings(stmt)
+	if err != nil {
+		panic(err)
+	}
+	//fmt.Fprintln(w, "Columns:")
+	// for _, c := range cols {
+	// 	fmt.Fprintf(w, "ColumnName: %s | ColumnAlias: %s | TableAlias: %s\n",
+	// 		c.ColumnName, c.ColumnAlias, c.TableAlias)
+	// }
+	//w.Flush()
+
+	return cols, nil
+}
+
+type TableAlias struct {
+	Alias     string // aliasu tabeli, lub nazwa tabeli jeśli alias nie podany
+	TableName string // faktyczna nazwa tabeli
+}
+
+type ColumnMapping struct {
+	ColumnName  string // nazwa kolumny, np. "company" albo "id"
+	ColumnAlias string // alias kolumny, jeśli `AS` użyte np. `... AS ca`
+	TableAlias  string // alias tabeli — np. "o", "alias_as_hell"
+}
+
+// Funkcja która mapuje kolumny z selekta do aliasów tabel
+func extractColumnMappings(stmt *sqlparser.Select) ([]ColumnMapping, error) {
+	var cols []ColumnMapping
+
+	for _, selExpr := range stmt.SelectExprs {
+		switch e := selExpr.(type) {
+		case *sqlparser.StarExpr:
+			// np. `*` albo `alias.*`
+			tableAlias := e.TableName.Name.String()
+			// jeśli jest alias przed gwiazdką
+			cols = append(cols, ColumnMapping{
+				ColumnName:  "*",
+				ColumnAlias: "",
+				TableAlias:  tableAlias,
+			})
+		case *sqlparser.AliasedExpr:
+			// np. coś jak `alias.company AS customer_name` albo `company AS customer_name`
+			var colAlias string
+			if !e.As.IsEmpty() {
+				colAlias = e.As.String()
+			}
+			// expr może być kolumną, funkcją lub innym wyrażeniem
+			// podstawowy przypadek: `*sqlparser.ColName`
+			switch col := e.Expr.(type) {
+			case *sqlparser.ColName:
+				// kolumna z table qualifier
+				qualifier := col.Qualifier.Name.String() // alias tabeli lub pusta
+				name := col.Name.String()
+				cols = append(cols, ColumnMapping{
+					ColumnName:  name,
+					ColumnAlias: colAlias,
+					TableAlias:  qualifier,
+				})
+			default:
+				// inne wyrażenie, np. funkcja, literał, wyrażenie arytmetyczne
+				// można potraktować podobnie: nie ma tableQualifier albo pusta
+				cols = append(cols, ColumnMapping{
+					ColumnName:  sqlparser.String(e.Expr),
+					ColumnAlias: colAlias,
+					TableAlias:  "",
+				})
+			}
+		default:
+			// inny typ SelectExpr? rzadziej się zdarza
+			cols = append(cols, ColumnMapping{
+				ColumnName:  sqlparser.String(selExpr),
+				ColumnAlias: "",
+				TableAlias:  "",
+			})
+		}
+	}
+
+	return cols, nil
 }
