@@ -67,7 +67,7 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{ dbarg }} {{.Arg.Pair}}
 {{end}}
 
 {{if eq .IsDynamic true}}
-func (q *Queries) {{.MethodName}}Dynamic(ctx context.Context, conditions *squirrel.SelectBuilder, {{ dbarg }} {{.Arg.Pair}}) ([]{{.Ret.DefineType}}, error) {
+func (q *Queries) {{.MethodName}}Dynamic(ctx context.Context, conditions *dynamic.DynamicQueryBuilder, {{ dbarg }} {{.Arg.Pair}}) ([]{{.Ret.DefineType}}, error) {
 	rows, err := dynamic.DynamicQuery[ {{if ne .Arg.Name ""}}{{.Arg.Type}}{{else}}struct{}{{end}} , {{.Ret.DefineType}}](
 		ctx,
 		q.db.(*sql.DB),
@@ -80,6 +80,30 @@ func (q *Queries) {{.MethodName}}Dynamic(ctx context.Context, conditions *squirr
 	}
 	return rows, nil
 }
+
+func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *dynamic.DynamicQueryBuilder, {{ dbarg }} {{.Arg.Pair}}) (int64, error) {
+	if conditions.GetGroups() != nil {
+		return -1, errors.New("cannot use GetOrdersDynamicCount with groups")
+	}
+	query := {{.MethodName}}
+	// Replace SELECT ... FROM with SELECT count(*) AS count FROM using regex
+	re := regexp.MustCompile(`(?is)SELECT\s+.*?\s+FROM`)
+	query = re.ReplaceAllString(query, "SELECT count(*) AS count FROM")
+
+	r, err := dynamic.DynamicQuery[ {{if ne .Arg.Name ""}}{{.Arg.Type}}{{else}}struct{}{{end}}, int64](
+		ctx,
+		q.db.(*sql.DB),
+		query,
+		{{if ne .Arg.Name ""}}&{{.Arg.Name}}{{else}}&struct{}{}{{end}},
+		conditions,
+	)
+	if err != nil || len(r) == 0 {
+		return -1, err
+	}
+	return r[0], nil
+}
+
+
 {{end -}}
 
 

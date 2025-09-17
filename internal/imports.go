@@ -346,10 +346,12 @@ func (i *importer) queryImports(filename string) fileImports {
 
 	for _, q := range gq {
 		if q.IsDynamic && q.SourceName == filename {
-			pkg[ImportSpec{Path: "github.com/Masterminds/squirrel"}] = struct{}{}
+			//pkg[ImportSpec{Path: "github.com/Masterminds/squirrel"}] = struct{}{}
 			pkg[ImportSpec{Path: "as-pl.com/common/db/dynamic"}] = struct{}{}
 			std["database/sql"] = struct{}{}
-			//xx 112344343343233333333333333
+			std["errors"] = struct{}{}
+			std["regexp"] = struct{}{}
+			//xx 11234434334323333333333
 		}
 	}
 
