@@ -348,6 +348,7 @@ func (i *importer) queryImports(filename string) fileImports {
 		if q.IsDynamic && q.SourceName == filename {
 			pkg[ImportSpec{Path: "github.com/Masterminds/squirrel"}] = struct{}{}
 			pkg[ImportSpec{Path: "as-pl.com/common/db/dynamic"}] = struct{}{}
+			std["database/sql"] = struct{}{}
 			//xx 112344343343233333333333333
 		}
 	}
