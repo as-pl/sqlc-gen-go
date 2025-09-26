@@ -67,7 +67,7 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{ dbarg }} {{.Arg.Pair}}
 {{end}}
 
 {{if eq .IsDynamic true}}
-func (q *Queries) {{.MethodName}}Dynamic(ctx context.Context, conditions *dynamic.DynamicQueryBuilder, {{ dbarg }} {{.Arg.Pair}}) ([]{{.Ret.DefineType}}, error) {
+func (q *Queries) {{.MethodName}}Dynamic(ctx context.Context, conditions *goqu.SelectDataset, {{ dbarg }} {{.Arg.Pair}}) ([]{{.Ret.DefineType}}, error) {
 	rows, err := dynamic.DynamicQuery[ {{if ne .Arg.Name ""}}{{.Arg.Type}}{{else}}struct{}{{end}} , {{.Ret.DefineType}}](
 		ctx,
 		q.db.(*sql.DB),
@@ -81,7 +81,7 @@ func (q *Queries) {{.MethodName}}Dynamic(ctx context.Context, conditions *dynami
 	return rows, nil
 }
 
-func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *dynamic.DynamicQueryBuilder, {{ dbarg }} {{.Arg.Pair}}) (int64, error) {
+func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *goqu.SelectDataset, {{ dbarg }} {{.Arg.Pair}}) (int64, error) {
 	if conditions.GetGroups() != nil {
 		return -1, errors.New("cannot use GetOrdersDynamicCount with groups")
 	}

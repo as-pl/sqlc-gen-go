@@ -347,6 +347,7 @@ func (i *importer) queryImports(filename string) fileImports {
 	for _, q := range gq {
 		if q.IsDynamic && q.SourceName == filename {
 			//pkg[ImportSpec{Path: "github.com/Masterminds/squirrel"}] = struct{}{}
+			pkg[ImportSpec{Path: "github.com/doug-martin/goqu/v9"}] = struct{}{}
 			pkg[ImportSpec{Path: "as-pl.com/common/db/dynamic"}] = struct{}{}
 			std["database/sql"] = struct{}{}
 			std["errors"] = struct{}{}
