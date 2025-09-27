@@ -82,13 +82,18 @@ func (q *Queries) {{.MethodName}}Dynamic(ctx context.Context, conditions *goqu.S
 }
 
 func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *goqu.SelectDataset, {{ dbarg }} {{.Arg.Pair}}) (int64, error) {
-	if conditions.GetGroups() != nil {
+    conditions = conditions.ClearLimit().ClearOrder().ClearOffset()
+	sqlStr, _, _ := conditions.ToSQL()
+	hasGroupBy := strings.Contains(sqlStr, "GROUP BY")
+	if hasGroupBy {
 		return -1, errors.New("cannot use GetOrdersDynamicCount with groups")
 	}
 	query := {{.MethodName}}
 	// Replace SELECT ... FROM with SELECT count(*) AS count FROM using regex
 	re := regexp.MustCompile(`(?is)SELECT\s+.*?\s+FROM`)
 	query = re.ReplaceAllString(query, "SELECT count(*) AS count FROM")
+    aliases := dynamic.ExtractAliasesFromWhere(sqlStr)
+	query = dynamic.CutUnusedLeftJoins(query, aliases)
 
 	r, err := dynamic.DynamicQuery[ {{if ne .Arg.Name ""}}{{.Arg.Type}}{{else}}struct{}{{end}}, int64](
 		ctx,

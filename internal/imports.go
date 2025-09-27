@@ -352,7 +352,7 @@ func (i *importer) queryImports(filename string) fileImports {
 			std["database/sql"] = struct{}{}
 			std["errors"] = struct{}{}
 			std["regexp"] = struct{}{}
-			//xx 11234434334323333333333
+			//xx 1123443433432333333333331
 		}
 	}
 
