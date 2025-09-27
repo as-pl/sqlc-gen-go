@@ -3,6 +3,7 @@ package golang
 import (
 	"bufio"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -218,16 +219,27 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 			}
 		}
 
-		gq := Query{
-			Cmd:          query.Cmd,
-			ConstantName: constantName,
-			FieldName:    sdk.LowerTitle(query.Name) + "Stmt",
-			MethodName:   query.Name,
-			SourceName:   query.Filename,
-			SQL:          query.Text,
-			Comments:     comments,
-			Table:        query.InsertIntoTable,
-			IsDynamic:    strings.Contains(query.Text, "-- conditions --"),
+		isDynamic := strings.Contains(query.Text, "-- conditions --")
+		parsed := QueryToCountParts{}
+		if isDynamic {
+			var err error
+			parsed, err = ParseQueryToCountParts(query.Text)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		gq := Query{ //123111
+			Cmd:               query.Cmd,
+			ConstantName:      constantName,
+			FieldName:         sdk.LowerTitle(query.Name) + "Stmt",
+			MethodName:        query.Name,
+			SourceName:        query.Filename,
+			SQL:               query.Text,
+			Comments:          comments,
+			Table:             query.InsertIntoTable,
+			IsDynamic:         isDynamic,
+			QueryToCountParts: parsed,
 		}
 		sqlpkg := parseDriver(options.SqlPackage)
 
@@ -580,4 +592,152 @@ func extractColumnMappings(stmt *sqlparser.Select) ([]ColumnMapping, error) {
 	}
 
 	return cols, nil
+}
+
+// ParseQueryToCountParts czyści i parsuje SQL do części: FROM / JOINS / WHERE.
+func ParseQueryToCountParts(raw string) (QueryToCountParts, error) {
+	sql := sanitizeSQL(raw)
+
+	stmt, err := sqlparser.Parse(sql)
+	if err != nil {
+		return QueryToCountParts{}, fmt.Errorf("sql parse error: %w", err)
+	}
+	sel, ok := stmt.(*sqlparser.Select)
+	if !ok {
+		return QueryToCountParts{}, fmt.Errorf("expected SELECT statement ")
+	}
+
+	out := QueryToCountParts{Joins: map[string]string{}}
+
+	// FROM = lewy-most element (np. "shop_orders AS o")
+	if len(sel.From) > 0 {
+		if base := leftMostAliased(sel.From[0]); base != nil {
+			out.From = sqlparser.String(base)
+		} else {
+			out.From = sqlparser.String(sel.From[0])
+		}
+	}
+
+	// WHERE = sama ekspresja (bez słowa WHERE)
+	if sel.Where != nil && sel.Where.Expr != nil {
+		out.Where = sqlparser.String(sel.Where.Expr)
+	}
+
+	// JOINS = z całego drzewa FROM
+	for _, te := range sel.From {
+		collectJoins(te, out.Joins)
+	}
+
+	// (opcjonalnie) deterministyczna kolejność kluczy przy debugowaniu
+	_ = sortedKeys(out.Joins)
+
+	return out, nil
+}
+
+// --- helpers ---
+
+func sanitizeSQL(s string) string {
+	// usuń /* ... */ (blokowe)
+	s = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(s, "")
+	// usuń linie zaczynające się od -- (np. "-- name: ...")
+	s = regexp.MustCompile(`(?m)^[ \t]*--.*$`).ReplaceAllString(s, "")
+	// usuń SQL_CALC_FOUND_ROWS (stary mysql-izm potrafi psuć parser)
+	s = regexp.MustCompile(`(?i)\bsql_calc_found_rows\b`).ReplaceAllString(s, "")
+	// uprość LIKE BINARY → LIKE (parserowi to obojętne, a często tu się wywala)
+	s = regexp.MustCompile(`(?i)\blike\s+binary\b`).ReplaceAllString(s, "LIKE")
+	s = regexp.MustCompile(`(?i)\bnot\s+like\s+binary\b`).ReplaceAllString(s, "NOT LIKE")
+
+	s = strings.TrimSpace(s)
+	// przytnij do pierwszego SELECT (gdy plik ma nagłówki)
+	if i := strings.Index(strings.ToLower(s), "select"); i >= 0 {
+		s = s[i:]
+	}
+	// zdejmij końcowy średnik
+	s = strings.TrimRight(s, " \t\r\n;")
+	return s
+}
+
+func leftMostAliased(te sqlparser.TableExpr) *sqlparser.AliasedTableExpr {
+	for {
+		switch t := te.(type) {
+		case *sqlparser.JoinTableExpr:
+			te = t.LeftExpr
+		case *sqlparser.AliasedTableExpr:
+			return t
+		default:
+			return nil
+		}
+	}
+}
+
+func collectJoins(te sqlparser.TableExpr, dst map[string]string) {
+	switch t := te.(type) {
+	case *sqlparser.JoinTableExpr:
+		// z lewej też mogą być joiny
+		collectJoins(t.LeftExpr, dst)
+
+		// prawa strona niesie alias joina
+		alias := aliasOf(t.RightExpr)
+
+		joinType := strings.ToUpper(strings.TrimSpace(t.Join)) // w tym parserze Join to string
+		if joinType == "" {
+			joinType = "JOIN"
+		}
+		right := sqlparser.String(t.RightExpr)
+
+		cond := ""
+		// Uwaga: t.Condition to struct (nie pointer) → sprawdzamy pola
+		if t.Condition.On != nil {
+			cond = " ON " + sqlparser.String(t.Condition.On)
+		} else if len(t.Condition.Using) > 0 {
+			cond = " USING " + sqlparser.String(t.Condition.Using)
+		}
+
+		joinStr := joinType + " " + right + cond
+
+		key := strings.ToLower(alias)
+		if key == "" {
+			if tbl, _ := tableAndAlias(t.RightExpr); tbl != "" {
+				key = strings.ToLower(tbl)
+			}
+		}
+		if key != "" {
+			dst[key] = joinStr
+		}
+
+		// wejdź też w prawo (zagnieżdżone joiny)
+		collectJoins(t.RightExpr, dst)
+	}
+}
+
+func aliasOf(te sqlparser.TableExpr) string {
+	if a, ok := te.(*sqlparser.AliasedTableExpr); ok {
+		return a.As.String()
+	}
+	return ""
+}
+
+func tableAndAlias(te sqlparser.TableExpr) (table, alias string) {
+	if a, ok := te.(*sqlparser.AliasedTableExpr); ok {
+		alias = a.As.String()
+		switch e := a.Expr.(type) {
+		case sqlparser.TableName:
+			table = e.Name.String()
+			if q := e.Qualifier.String(); q != "" {
+				table = q + "." + table
+			}
+		case *sqlparser.Subquery:
+			table = "(subquery)"
+		}
+	}
+	return
+}
+
+func sortedKeys(m map[string]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }

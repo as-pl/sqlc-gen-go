@@ -254,18 +254,25 @@ func (v QueryValue) VariableForField(f Field) string {
 	return v.Name + "." + f.Name
 }
 
+type QueryToCountParts struct {
+	From  string
+	Joins map[string]string
+	Where string
+}
+
 // A struct used to generate methods and fields on the Queries struct
 type Query struct {
-	Cmd          string
-	Comments     []string
-	MethodName   string
-	FieldName    string
-	ConstantName string
-	SQL          string
-	SourceName   string
-	Ret          QueryValue
-	Arg          QueryValue
-	IsDynamic    bool
+	Cmd               string
+	Comments          []string
+	MethodName        string
+	FieldName         string
+	ConstantName      string
+	SQL               string
+	SourceName        string
+	Ret               QueryValue
+	Arg               QueryValue
+	IsDynamic         bool
+	QueryToCountParts QueryToCountParts // SQL parts used to build the count query for dynamic queries
 	// Used for :copyfrom
 	Table *plugin.Identifier
 }

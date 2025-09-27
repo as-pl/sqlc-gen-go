@@ -81,6 +81,24 @@ func (q *Queries) {{.MethodName}}Dynamic(ctx context.Context, conditions *goqu.S
 	return rows, nil
 }
 
+
+
+var {{.MethodName}}Count_Helper = struct {
+	From  string
+	Joins map[string]string
+	Where string
+}{
+    From:  {{printf "%q" .QueryToCountParts.From}},
+    Joins: map[string]string{
+        {{- range $k, $v := .QueryToCountParts.Joins }}
+        {{ printf "%q" $k }}: {{ printf "%q" $v }},
+        {{- end }}
+    },
+    Where: {{printf "%q" .QueryToCountParts.Where}},
+}
+
+
+
 func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *goqu.SelectDataset, {{ dbarg }} {{.Arg.Pair}}) (int64, error) {
     conditions = conditions.ClearLimit().ClearOrder().ClearOffset()
 	sqlStr, _, _ := conditions.ToSQL()
@@ -88,12 +106,18 @@ func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *g
 	if hasGroupBy {
 		return -1, errors.New("cannot use GetOrdersDynamicCount with groups")
 	}
-	query := {{.MethodName}}
-	// Replace SELECT ... FROM with SELECT count(*) AS count FROM using regex
-	re := regexp.MustCompile(`(?is)SELECT\s+.*?\s+FROM`)
-	query = re.ReplaceAllString(query, "SELECT count(*) AS count FROM")
-    aliases := dynamic.ExtractAliasesFromWhere(sqlStr)
-	query = dynamic.CutUnusedLeftJoins(query, aliases)
+	query := "SELECT count(*) AS count\n FROM " + {{.MethodName}}Count_Helper.From
+
+	aliases := dynamic.ExtractAliasesFromWhere(sqlStr)
+	for name, join := range {{.MethodName}}Count_Helper.Joins {
+		ok := slices.Contains(aliases, name)
+		if ok || !strings.HasPrefix(join, "LEFT ") {
+			query += "\n" + join
+		}
+	}
+
+    
+    query += " \nWHERE " + {{.MethodName}}Count_Helper.Where + " \n-- conditions --"
 
 	r, err := dynamic.DynamicQuery[ {{if ne .Arg.Name ""}}{{.Arg.Type}}{{else}}struct{}{{end}}, int64](
 		ctx,
