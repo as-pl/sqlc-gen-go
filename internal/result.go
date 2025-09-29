@@ -229,7 +229,7 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 			}
 		}
 
-		gq := Query{ //123111
+		gq := Query{ //123111122232
 			Cmd:               query.Cmd,
 			ConstantName:      constantName,
 			FieldName:         sdk.LowerTitle(query.Name) + "Stmt",
@@ -607,7 +607,7 @@ func ParseQueryToCountParts(raw string) (QueryToCountParts, error) {
 		return QueryToCountParts{}, fmt.Errorf("expected SELECT statement ")
 	}
 
-	out := QueryToCountParts{Joins: map[string]string{}}
+	out := QueryToCountParts{Joins: make(map[string]JoinPart)}
 
 	// FROM = lewy-most element (np. "shop_orders AS o")
 	if len(sel.From) > 0 {
@@ -670,23 +670,27 @@ func leftMostAliased(te sqlparser.TableExpr) *sqlparser.AliasedTableExpr {
 	}
 }
 
-func collectJoins(te sqlparser.TableExpr, dst map[string]string) {
+func collectJoins(te sqlparser.TableExpr, dst map[string]JoinPart) {
 	switch t := te.(type) {
 	case *sqlparser.JoinTableExpr:
-		// z lewej też mogą być joiny
+		// rekurencja w lewo
 		collectJoins(t.LeftExpr, dst)
 
-		// prawa strona niesie alias joina
-		alias := aliasOf(t.RightExpr)
+		rightAlias := aliasOf(t.RightExpr)
+		leftAlias := aliasOf(t.LeftExpr)
 
-		joinType := strings.ToUpper(strings.TrimSpace(t.Join)) // w tym parserze Join to string
+		// 👇 poprawka: jeśli leftAlias pusty, spróbuj z ostatniego aliasu z lewej strony
+		if leftAlias == "" {
+			leftAlias = lastAliasFromExpr(t.LeftExpr)
+		}
+
+		joinType := strings.ToUpper(strings.TrimSpace(t.Join))
 		if joinType == "" {
 			joinType = "JOIN"
 		}
 		right := sqlparser.String(t.RightExpr)
 
 		cond := ""
-		// Uwaga: t.Condition to struct (nie pointer) → sprawdzamy pola
 		if t.Condition.On != nil {
 			cond = " ON " + sqlparser.String(t.Condition.On)
 		} else if len(t.Condition.Using) > 0 {
@@ -695,19 +699,35 @@ func collectJoins(te sqlparser.TableExpr, dst map[string]string) {
 
 		joinStr := joinType + " " + right + cond
 
-		key := strings.ToLower(alias)
+		key := strings.ToLower(rightAlias)
 		if key == "" {
 			if tbl, _ := tableAndAlias(t.RightExpr); tbl != "" {
 				key = strings.ToLower(tbl)
 			}
 		}
+
 		if key != "" {
-			dst[key] = joinStr
+			dst[key] = JoinPart{
+				Alias:     key,
+				JoinText:  joinStr,
+				DependsOn: strings.ToLower(leftAlias),
+			}
 		}
 
-		// wejdź też w prawo (zagnieżdżone joiny)
+		// rekurencja w prawo
 		collectJoins(t.RightExpr, dst)
 	}
+}
+
+func lastAliasFromExpr(te sqlparser.TableExpr) string {
+	switch t := te.(type) {
+	case *sqlparser.AliasedTableExpr:
+		return aliasOf(t)
+	case *sqlparser.JoinTableExpr:
+		// idź w prawo, bo ostatni alias siedzi w prawym joinie
+		return lastAliasFromExpr(t.RightExpr)
+	}
+	return ""
 }
 
 func aliasOf(te sqlparser.TableExpr) string {
@@ -733,7 +753,7 @@ func tableAndAlias(te sqlparser.TableExpr) (table, alias string) {
 	return
 }
 
-func sortedKeys(m map[string]string) []string {
+func sortedKeys(m map[string]JoinPart) []string {
 	ks := make([]string, 0, len(m))
 	for k := range m {
 		ks = append(ks, k)

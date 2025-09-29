@@ -254,9 +254,15 @@ func (v QueryValue) VariableForField(f Field) string {
 	return v.Name + "." + f.Name
 }
 
+type JoinPart struct {
+	Alias     string // alias tabeli (np. "c")
+	JoinText  string // cały tekst joina (np. "LEFT JOIN companies c ON ...")
+	DependsOn string // alias z lewej strony, na którym ten join się opiera (np. "o")
+}
+
 type QueryToCountParts struct {
 	From  string
-	Joins map[string]string
+	Joins map[string]JoinPart // klucz: alias
 	Where string
 }
 

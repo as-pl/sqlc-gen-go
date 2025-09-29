@@ -85,18 +85,29 @@ func (q *Queries) {{.MethodName}}Dynamic(ctx context.Context, conditions *goqu.S
 
 var {{.MethodName}}Count_Helper = struct {
 	From  string
-	Joins map[string]string
+	Joins map[string]struct {
+		Alias     string
+		JoinText  string
+		DependsOn string
+	}
 	Where string
 }{
-    From:  {{printf "%q" .QueryToCountParts.From}},
-    Joins: map[string]string{
-        {{- range $k, $v := .QueryToCountParts.Joins }}
-        {{ printf "%q" $k }}: {{ printf "%q" $v }},
-        {{- end }}
-    },
-    Where: {{printf "%q" .QueryToCountParts.Where}},
+	From:  {{printf "%q" .QueryToCountParts.From}},
+	Joins: map[string]struct {
+		Alias     string
+		JoinText  string
+		DependsOn string
+	}{
+		{{- range $k, $v := .QueryToCountParts.Joins }}
+		{{ printf "%q" $k }}: {
+			Alias:     {{ printf "%q" $v.Alias }},
+			JoinText:  {{ printf "%q" $v.JoinText }},
+			DependsOn: {{ printf "%q" $v.DependsOn }},
+		},
+		{{- end }}
+	},
+	Where: {{printf "%q" .QueryToCountParts.Where}},
 }
-
 
 
 func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *goqu.SelectDataset, {{ dbarg }} {{.Arg.Pair}}) (int64, error) {
@@ -108,11 +119,31 @@ func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *g
 	}
 	query := "SELECT count(*) AS count\n FROM " + {{.MethodName}}Count_Helper.From
 
+	// mapa aliasów już dodanych
+	include := make(map[string]bool)
+
 	aliases := dynamic.ExtractAliasesFromWhere(sqlStr)
+	// zamiast pomocniczej funkcji: mała pętla która rekurencyjnie dokłada dependsOn
+	var addJoin func(name string)
+	addJoin = func(name string) {
+		if include[name] {
+			return
+		}
+		join, ok := {{.MethodName}}Count_Helper.Joins[name]
+		if !ok {
+			return
+		}
+		if join.DependsOn != "" {
+			addJoin(join.DependsOn) // najpierw zależność
+		}
+		query += "\n" + join.JoinText
+		include[name] = true
+	}
+
 	for name, join := range {{.MethodName}}Count_Helper.Joins {
 		ok := slices.Contains(aliases, name)
-		if ok || !strings.HasPrefix(join, "LEFT ") {
-			query += "\n" + join
+		if ok || !strings.HasPrefix(join.JoinText, "LEFT ") {
+			addJoin(name)
 		}
 	}
 
