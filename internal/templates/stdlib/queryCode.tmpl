@@ -66,12 +66,15 @@ func (q *Queries) {{.MethodName}}(ctx context.Context, {{ dbarg }} {{.Arg.Pair}}
 }
 {{end}}
 
+
+
+
 {{if eq .IsDynamic true}}
 func (q *Queries) {{.MethodName}}Dynamic(ctx context.Context, conditions *goqu.SelectDataset, {{ dbarg }} {{.Arg.Pair}}) ([]{{.Ret.DefineType}}, error) {
-	rows, err := dynamic.DynamicQuery[ {{if ne .Arg.Name ""}}{{.Arg.Type}}{{else}}struct{}{{end}} , {{.Ret.DefineType}}](
+	rows, err := dynamic.DynamicQueryFromLightAST[ {{if ne .Arg.Name ""}}{{.Arg.Type}}{{else}}struct{}{{end}} , {{.Ret.DefineType}}](
 		ctx,
 		q.db.(*sql.DB),
-		{{.MethodName}},
+		{{.MethodName}}LightAST_Helper,
         {{if ne .Arg.Name ""}}&{{.Arg.Name}}{{else}}&struct{}{}{{end}}, 
 		conditions,
 	)
@@ -83,74 +86,63 @@ func (q *Queries) {{.MethodName}}Dynamic(ctx context.Context, conditions *goqu.S
 
 
 
-var {{.MethodName}}Count_Helper = struct {
-	From  string
-	Joins map[string]struct {
-		Alias     string
-		JoinText  string
-		DependsOn string
-	}
-	Where string
-}{
-	From:  {{printf "%q" .QueryToCountParts.From}},
-	Joins: map[string]struct {
-		Alias     string
-		JoinText  string
-		DependsOn string
-	}{
-		{{- range $k, $v := .QueryToCountParts.Joins }}
-		{{ printf "%q" $k }}: {
-			Alias:     {{ printf "%q" $v.Alias }},
-			JoinText:  {{ printf "%q" $v.JoinText }},
-			DependsOn: {{ printf "%q" $v.DependsOn }},
-		},
-		{{- end }}
-	},
-	Where: {{printf "%q" .QueryToCountParts.Where}},
+var {{.MethodName}}LightAST_Helper = dynamic.QueryLightAST{
+    Select: []string{
+        {{- range .QueryToCountParts.Select }}
+        {{ printf "%q" . }},
+        {{- end }}
+    },
+    From: {{ printf "%q" .QueryToCountParts.From }},
+    Joins: map[string]dynamic.JoinPart{
+        {{- range $k, $v := .QueryToCountParts.Joins }}
+        {{ printf "%q" $k }}: {
+            Alias:     {{ printf "%q" $v.Alias }},
+            JoinText:  {{ printf "%q" $v.JoinText }},
+            DependsOn: {{ printf "%q" $v.DependsOn }},
+            Order: {{ printf "%v" $v.Order }},
+        },
+        {{- end }}
+    },
+    Where:      {{ printf "%q" .QueryToCountParts.Where }},
+    WhereCount: {{ .QueryToCountParts.WhereCount }},
+    GroupBy:    {{ printf "%q" .QueryToCountParts.GroupBy }},
+    GroupByCount: {{ .QueryToCountParts.GroupByCount }},
+    Having:     {{ printf "%q" .QueryToCountParts.Having }},
+    HavingCount: {{ .QueryToCountParts.HavingCount }},
+    OrderBy:    {{ printf "%q" .QueryToCountParts.OrderBy }},
+    OrderByCount: {{ .QueryToCountParts.OrderByCount }},
+    Limit:      {{ printf "%q" .QueryToCountParts.Limit }},
+    LimitCount: {{ .QueryToCountParts.LimitCount }},
+    Offset:     {{ printf "%q" .QueryToCountParts.Offset }},
+    OffsetCount: {{ .QueryToCountParts.OffsetCount }},
+    Meta: map[string]string{
+        {{- range $k, $v := .QueryToCountParts.Meta }}
+        {{ printf "%q" $k }}: {{ printf "%q" $v }},
+        {{- end }}
+    },
 }
-
 
 func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *goqu.SelectDataset, {{ dbarg }} {{.Arg.Pair}}) (int64, error) {
     conditions = conditions.ClearLimit().ClearOrder().ClearOffset()
 	sqlStr, _, _ := conditions.ToSQL()
-	hasGroupBy := strings.Contains(sqlStr, "GROUP BY")
-	if hasGroupBy {
-		return -1, errors.New("cannot use GetOrdersDynamicCount with groups")
-	}
-	query := "SELECT count(*) AS count\n FROM " + {{.MethodName}}Count_Helper.From
+	
 
-	// mapa aliasów już dodanych
-	include := make(map[string]bool)
+    query := {{.MethodName}}LightAST_Helper.Clone()
+	query.Select = []string{"count(*) AS count"}
 
 	aliases := dynamic.ExtractAliasesFromWhere(sqlStr)
-	// zamiast pomocniczej funkcji: mała pętla która rekurencyjnie dokłada dependsOn
-	var addJoin func(name string)
-	addJoin = func(name string) {
-		if include[name] {
-			return
-		}
-		join, ok := {{.MethodName}}Count_Helper.Joins[name]
-		if !ok {
-			return
-		}
-		if join.DependsOn != "" {
-			addJoin(join.DependsOn) // najpierw zależność
-		}
-		query += "\n" + join.JoinText
-		include[name] = true
-	}
-
-	for name, join := range {{.MethodName}}Count_Helper.Joins {
+	query.Joins = map[string]dynamic.JoinPart{}
+	for name, join := range {{.MethodName}}LightAST_Helper.Joins {
 		ok := slices.Contains(aliases, name)
 		if ok || !strings.HasPrefix(join.JoinText, "LEFT ") {
-			addJoin(name)
+			if _, exists := query.Joins[name]; !exists {
+				query.Joins[name] = join
+			}
 		}
 	}
 
-    
-    query += " \nWHERE " + {{.MethodName}}Count_Helper.Where + " \n-- conditions --"
-
-	r, err := dynamic.DynamicQuery[ {{if ne .Arg.Name ""}}{{.Arg.Type}}{{else}}struct{}{{end}}, int64](
+    query.Meta["isCountQuery"] = "true"
+	r, err := dynamic.DynamicQueryFromLightAST[ {{if ne .Arg.Name ""}}{{.Arg.Type}}{{else}}struct{}{{end}}, int64](
 		ctx,
 		q.db.(*sql.DB),
 		query,

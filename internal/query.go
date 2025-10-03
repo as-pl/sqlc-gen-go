@@ -258,12 +258,40 @@ type JoinPart struct {
 	Alias     string // alias tabeli (np. "c")
 	JoinText  string // cały tekst joina (np. "LEFT JOIN companies c ON ...")
 	DependsOn string // alias z lewej strony, na którym ten join się opiera (np. "o")
+	Order     int    // wewnętrzne, do sortowania joinów wg zależności
 }
 
-type QueryToCountParts struct {
-	From  string
-	Joins map[string]JoinPart // klucz: alias
-	Where string
+type ColumnMeta struct {
+	Name         string
+	TableAlias   string
+	IsPrimaryKey bool
+}
+
+type QueryLightAST struct {
+	Select  []string
+	From    string
+	Joins   map[string]JoinPart
+	Columns []ColumnMeta
+
+	Where      string
+	WhereCount int
+
+	GroupBy      string
+	GroupByCount int
+
+	Having      string
+	HavingCount int
+
+	OrderBy      string
+	OrderByCount int
+
+	Limit      string
+	LimitCount int
+
+	Offset      string
+	OffsetCount int
+
+	Meta map[string]string // dodatkowe metadane z komentarzy
 }
 
 // A struct used to generate methods and fields on the Queries struct
@@ -278,7 +306,7 @@ type Query struct {
 	Ret               QueryValue
 	Arg               QueryValue
 	IsDynamic         bool
-	QueryToCountParts QueryToCountParts // SQL parts used to build the count query for dynamic queries
+	QueryToCountParts QueryLightAST // SQL parts used to build the count query for dynamic queries
 	// Used for :copyfrom
 	Table *plugin.Identifier
 }

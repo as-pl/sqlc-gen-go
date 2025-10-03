@@ -3,9 +3,11 @@ package golang
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/sqlc-dev/plugin-sdk-go/metadata"
 	"github.com/sqlc-dev/plugin-sdk-go/plugin"
@@ -219,17 +221,35 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 			}
 		}
 
-		isDynamic := strings.Contains(query.Text, "-- conditions --")
-		parsed := QueryToCountParts{}
+		commentsMap := make(map[string]string)
+		for _, c := range comments {
+			tmp := strings.SplitN(c, ":", 2)
+			if len(tmp) == 2 {
+				commentsMap[strings.TrimSpace(tmp[0])] = strings.TrimSpace(tmp[1])
+			} else {
+				commentsMap[strings.TrimSpace(tmp[0])] = ""
+			}
+		}
+		for k, v := range commentsMap {
+			mylog(fmt.Sprintf("Comment '%s': %s", k, v))
+		}
+
+		_, isDynamic := commentsMap["dynamic"]
+
+		mylog(fmt.Sprintf(" is dynamic %s '%v'", query.Name, isDynamic))
+
+		parsed := QueryLightAST{}
+
 		if isDynamic {
 			var err error
 			parsed, err = ParseQueryToCountParts(query.Text)
 			if err != nil {
 				return nil, err
 			}
+			parsed.Meta = commentsMap
 		}
 
-		gq := Query{ //123111122232
+		gq := Query{ //12311112223222
 			Cmd:               query.Cmd,
 			ConstantName:      constantName,
 			FieldName:         sdk.LowerTitle(query.Name) + "Stmt",
@@ -595,21 +615,41 @@ func extractColumnMappings(stmt *sqlparser.Select) ([]ColumnMapping, error) {
 }
 
 // ParseQueryToCountParts czyści i parsuje SQL do części: FROM / JOINS / WHERE.
-func ParseQueryToCountParts(raw string) (QueryToCountParts, error) {
+func ParseQueryToCountParts(raw string) (QueryLightAST, error) {
 	sql := sanitizeSQL(raw)
 
 	stmt, err := sqlparser.Parse(sql)
 	if err != nil {
-		return QueryToCountParts{}, fmt.Errorf("sql parse error: %w", err)
+		return QueryLightAST{}, fmt.Errorf("sql parse error: %w", err)
 	}
 	sel, ok := stmt.(*sqlparser.Select)
 	if !ok {
-		return QueryToCountParts{}, fmt.Errorf("expected SELECT statement ")
+		return QueryLightAST{}, fmt.Errorf("expected SELECT statement")
 	}
 
-	out := QueryToCountParts{Joins: make(map[string]JoinPart)}
+	out := QueryLightAST{Joins: make(map[string]JoinPart)}
 
-	// FROM = lewy-most element (np. "shop_orders AS o")
+	// SELECT
+	for _, expr := range sel.SelectExprs {
+		switch e := expr.(type) {
+		case *sqlparser.AliasedExpr:
+			if e.As.String() != "" {
+				out.Select = append(out.Select, sqlparser.String(e.Expr)+" AS "+e.As.String())
+			} else {
+				out.Select = append(out.Select, sqlparser.String(e.Expr))
+			}
+		case *sqlparser.StarExpr:
+			if e.TableName.Name.String() != "" {
+				out.Select = append(out.Select, e.TableName.Name.String()+".*")
+			} else {
+				out.Select = append(out.Select, "*")
+			}
+		default:
+			out.Select = append(out.Select, sqlparser.String(expr))
+		}
+	}
+
+	// FROM
 	if len(sel.From) > 0 {
 		if base := leftMostAliased(sel.From[0]); base != nil {
 			out.From = sqlparser.String(base)
@@ -618,24 +658,66 @@ func ParseQueryToCountParts(raw string) (QueryToCountParts, error) {
 		}
 	}
 
-	// WHERE = sama ekspresja (bez słowa WHERE)
+	// WHERE
 	if sel.Where != nil && sel.Where.Expr != nil {
 		out.Where = sqlparser.String(sel.Where.Expr)
+		out.WhereCount = countPlaceholders(out.Where)
 	}
 
-	// JOINS = z całego drzewa FROM
+	// JOINS
 	for _, te := range sel.From {
 		collectJoins(te, out.Joins)
 	}
 
-	// (opcjonalnie) deterministyczna kolejność kluczy przy debugowaniu
-	_ = sortedKeys(out.Joins)
+	// GROUP BY
+	if len(sel.GroupBy) > 0 {
+		raw = sqlparser.String(sel.GroupBy)
+		out.GroupBy = trimPrefixFold(raw, "group by")
+		out.GroupByCount = countPlaceholders(out.GroupBy)
+	}
+
+	// HAVING
+	if sel.Having != nil && sel.Having.Expr != nil {
+		raw = sqlparser.String(sel.Having.Expr)
+		out.Having = trimPrefixFold(raw, "having")
+		out.HavingCount = countPlaceholders(out.Having)
+	}
+
+	// ORDER BY
+	if len(sel.OrderBy) > 0 {
+		raw = sqlparser.String(sel.OrderBy)
+		out.OrderBy = trimPrefixFold(raw, "order by")
+		out.OrderByCount = countPlaceholders(out.OrderBy)
+	}
+
+	// LIMIT
+	if sel.Limit != nil {
+		if sel.Limit.Rowcount != nil {
+			out.Limit = sqlparser.String(sel.Limit.Rowcount)
+			out.LimitCount = countPlaceholders(out.Limit)
+		}
+		if sel.Limit.Offset != nil {
+			out.Offset = sqlparser.String(sel.Limit.Offset)
+			out.OffsetCount = countPlaceholders(out.Offset)
+		}
+	}
 
 	return out, nil
 }
 
+func trimPrefixFold(s, prefix string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(strings.ToLower(s), strings.ToLower(prefix)) {
+		return strings.TrimSpace(s[len(prefix):])
+	}
+	return s
+}
+
 // --- helpers ---
 
+func countPlaceholders(fragment string) int {
+	return strings.Count(fragment, "?")
+}
 func sanitizeSQL(s string) string {
 	// usuń /* ... */ (blokowe)
 	s = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(s, "")
@@ -670,6 +752,8 @@ func leftMostAliased(te sqlparser.TableExpr) *sqlparser.AliasedTableExpr {
 	}
 }
 
+var joinCounter int
+
 func collectJoins(te sqlparser.TableExpr, dst map[string]JoinPart) {
 	switch t := te.(type) {
 	case *sqlparser.JoinTableExpr:
@@ -678,8 +762,6 @@ func collectJoins(te sqlparser.TableExpr, dst map[string]JoinPart) {
 
 		rightAlias := aliasOf(t.RightExpr)
 		leftAlias := aliasOf(t.LeftExpr)
-
-		// 👇 poprawka: jeśli leftAlias pusty, spróbuj z ostatniego aliasu z lewej strony
 		if leftAlias == "" {
 			leftAlias = lastAliasFromExpr(t.LeftExpr)
 		}
@@ -707,10 +789,12 @@ func collectJoins(te sqlparser.TableExpr, dst map[string]JoinPart) {
 		}
 
 		if key != "" {
+			joinCounter++
 			dst[key] = JoinPart{
 				Alias:     key,
 				JoinText:  joinStr,
 				DependsOn: strings.ToLower(leftAlias),
+				Order:     joinCounter,
 			}
 		}
 
@@ -718,7 +802,6 @@ func collectJoins(te sqlparser.TableExpr, dst map[string]JoinPart) {
 		collectJoins(t.RightExpr, dst)
 	}
 }
-
 func lastAliasFromExpr(te sqlparser.TableExpr) string {
 	switch t := te.(type) {
 	case *sqlparser.AliasedTableExpr:
@@ -760,4 +843,19 @@ func sortedKeys(m map[string]JoinPart) []string {
 	}
 	sort.Strings(ks)
 	return ks
+}
+
+var logFile = "/tmp/sqlc-plugin.log"
+
+func mylog(txt string) {
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		// fallback na stderr jeśli nie uda się otworzyć pliku
+		fmt.Fprintln(os.Stderr, "log error:", err)
+		return
+	}
+	defer f.Close()
+
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	fmt.Fprintf(f, "[%s] %s\n", timestamp, txt)
 }
