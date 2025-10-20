@@ -255,10 +255,11 @@ func (v QueryValue) VariableForField(f Field) string {
 }
 
 type JoinPart struct {
-	Alias     string // alias tabeli (np. "c")
-	JoinText  string // cały tekst joina (np. "LEFT JOIN companies c ON ...")
-	DependsOn string // alias z lewej strony, na którym ten join się opiera (np. "o")
-	Order     int    // wewnętrzne, do sortowania joinów wg zależności
+	Alias      string // alias tabeli (np. "c")
+	JoinText   string // cały tekst joina (np. "LEFT JOIN companies c ON ...")
+	DependsOn  string // alias z lewej strony, na którym ten join się opiera (np. "o")
+	Order      int    // wewnętrzne, do sortowania joinów wg zależności
+	ParamCount int    // liczba parametrów w JoinText
 }
 
 type ColumnMeta struct {
@@ -273,23 +274,23 @@ type QueryLightAST struct {
 	Joins   map[string]JoinPart
 	Columns []ColumnMeta
 
-	Where      string
-	WhereCount int
+	Where           string
+	WhereParamCount int
 
-	GroupBy      string
-	GroupByCount int
+	GroupBy           string
+	GroupByParamCount int
 
-	Having      string
-	HavingCount int
+	Having           string
+	HavingParamCount int
 
-	OrderBy      string
-	OrderByCount int
+	OrderBy           string
+	OrderByParamCount int
 
-	Limit      string
-	LimitCount int
+	Limit           string
+	LimitParamCount int
 
-	Offset      string
-	OffsetCount int
+	Offset           string
+	OffsetParamCount int
 
 	Meta map[string]string // dodatkowe metadane z komentarzy
 }

@@ -650,9 +650,17 @@ func ParseQueryToCountParts(raw string) (QueryLightAST, error) {
 	}
 
 	// FROM
+	var baseAlias string
 	if len(sel.From) > 0 {
 		if base := leftMostAliased(sel.From[0]); base != nil {
 			out.From = sqlparser.String(base)
+			baseAlias = strings.ToLower(base.As.String())
+			if baseAlias == "" {
+				// jeśli brak aliasu, użyj nazwy tabeli
+				if tn, ok := base.Expr.(sqlparser.TableName); ok {
+					baseAlias = strings.ToLower(tn.Name.String())
+				}
+			}
 		} else {
 			out.From = sqlparser.String(sel.From[0])
 		}
@@ -661,48 +669,172 @@ func ParseQueryToCountParts(raw string) (QueryLightAST, error) {
 	// WHERE
 	if sel.Where != nil && sel.Where.Expr != nil {
 		out.Where = sqlparser.String(sel.Where.Expr)
-		out.WhereCount = countPlaceholders(out.Where)
+		out.Where = normalizePlaceholders(out.Where)
+		out.WhereParamCount = countPlaceholders(out.Where)
 	}
 
 	// JOINS
 	for _, te := range sel.From {
-		collectJoins(te, out.Joins)
+		collectJoinsWithDeps(te, out.Joins, baseAlias)
 	}
 
 	// GROUP BY
 	if len(sel.GroupBy) > 0 {
 		raw = sqlparser.String(sel.GroupBy)
 		out.GroupBy = trimPrefixFold(raw, "group by")
-		out.GroupByCount = countPlaceholders(out.GroupBy)
+		out.GroupBy = normalizePlaceholders(out.GroupBy)
+		out.GroupByParamCount = countPlaceholders(out.GroupBy)
+
 	}
 
 	// HAVING
 	if sel.Having != nil && sel.Having.Expr != nil {
 		raw = sqlparser.String(sel.Having.Expr)
 		out.Having = trimPrefixFold(raw, "having")
-		out.HavingCount = countPlaceholders(out.Having)
+		out.Having = normalizePlaceholders(out.Having)
+		out.HavingParamCount = countPlaceholders(out.Having)
 	}
 
 	// ORDER BY
 	if len(sel.OrderBy) > 0 {
 		raw = sqlparser.String(sel.OrderBy)
 		out.OrderBy = trimPrefixFold(raw, "order by")
-		out.OrderByCount = countPlaceholders(out.OrderBy)
+		out.OrderBy = normalizePlaceholders(out.OrderBy)
+		out.OrderByParamCount = countPlaceholders(out.OrderBy)
 	}
 
 	// LIMIT
 	if sel.Limit != nil {
 		if sel.Limit.Rowcount != nil {
 			out.Limit = sqlparser.String(sel.Limit.Rowcount)
-			out.LimitCount = countPlaceholders(out.Limit)
+			out.Limit = normalizePlaceholders(out.Limit)
+			out.LimitParamCount = countPlaceholders(out.Limit)
 		}
 		if sel.Limit.Offset != nil {
 			out.Offset = sqlparser.String(sel.Limit.Offset)
-			out.OffsetCount = countPlaceholders(out.Offset)
+			out.Offset = normalizePlaceholders(out.Offset)
+			out.OffsetParamCount = countPlaceholders(out.Offset)
 		}
 	}
 
 	return out, nil
+}
+
+func collectJoinsWithDeps(te sqlparser.TableExpr, dst map[string]JoinPart, baseAlias string) {
+	switch t := te.(type) {
+	case *sqlparser.JoinTableExpr:
+		// rekurencja w lewo
+		collectJoinsWithDeps(t.LeftExpr, dst, baseAlias)
+
+		rightAlias := aliasOf(t.RightExpr)
+		joinType := strings.ToUpper(strings.TrimSpace(t.Join))
+		if joinType == "" {
+			joinType = "JOIN"
+		}
+		right := sqlparser.String(t.RightExpr)
+
+		cond := ""
+		var onAliases map[string]struct{}
+		if t.Condition.On != nil {
+			cond = " ON " + sqlparser.String(t.Condition.On)
+			onAliases = referencedAliases(t.Condition.On)
+		} else if len(t.Condition.Using) > 0 {
+			cond = " USING " + sqlparser.String(t.Condition.Using)
+			// USING nie niesie aliasów wprost; potraktuj jako brak zależności
+			onAliases = map[string]struct{}{}
+		} else {
+			onAliases = map[string]struct{}{}
+		}
+
+		joinStr := joinType + " " + right + cond
+
+		key := strings.ToLower(rightAlias)
+		if key == "" {
+			if tbl, _ := tableAndAlias(t.RightExpr); tbl != "" {
+				key = strings.ToLower(tbl)
+			}
+		}
+
+		// 🔎 Wyznacz zależności na podstawie aliasów użytych w ON
+		// Usuń alias prawej tabeli i alias tabeli bazowej (jeśli traktujesz bazę jako "brak zależności")
+		delete(onAliases, strings.ToLower(rightAlias))
+		if baseAlias != "" {
+			delete(onAliases, strings.ToLower(baseAlias))
+		}
+		// Zbierz pozostałe aliasy w deterministycznej kolejności
+		depends := ""
+		if len(onAliases) > 0 {
+			names := make([]string, 0, len(onAliases))
+			for a := range onAliases {
+				names = append(names, a)
+			}
+			sort.Strings(names)
+			// jeśli JoinPart ma jedno pole DependsOn (string), wybierz pierwszy;
+			// alternatywnie możesz zmienić model na []string
+			depends = names[0]
+		}
+
+		if key != "" {
+			joinCounter++
+			dst[key] = JoinPart{
+				Alias:      key,
+				JoinText:   normalizePlaceholders(joinStr),
+				DependsOn:  depends, // ✅ już nie "owner_table", tylko faktyczna zależność lub ""
+				Order:      joinCounter,
+				ParamCount: countPlaceholders(normalizePlaceholders(joinStr)),
+			}
+		}
+
+		// rekurencja w prawo
+		collectJoinsWithDeps(t.RightExpr, dst, baseAlias)
+	}
+}
+
+func referencedAliases(e sqlparser.Expr) map[string]struct{} {
+	out := make(map[string]struct{})
+	var walk func(sqlparser.Expr)
+	walk = func(x sqlparser.Expr) {
+		switch n := x.(type) {
+		case *sqlparser.ColName:
+			// Qualifier może wyglądać jak: alias.kolumna
+			if q := n.Qualifier.Name.String(); q != "" {
+				out[strings.ToLower(q)] = struct{}{}
+			}
+		case *sqlparser.FuncExpr:
+			for _, ex := range n.Exprs {
+				if ae, ok := ex.(*sqlparser.AliasedExpr); ok && ae.Expr != nil {
+					walk(ae.Expr)
+				}
+			}
+		case *sqlparser.AndExpr:
+			walk(n.Left)
+			walk(n.Right)
+		case *sqlparser.OrExpr:
+			walk(n.Left)
+			walk(n.Right)
+		case *sqlparser.ComparisonExpr:
+			walk(n.Left)
+			walk(n.Right)
+		case *sqlparser.ParenExpr:
+			walk(n.Expr)
+		case *sqlparser.RangeCond:
+			walk(n.Left)
+			walk(n.From)
+			walk(n.To)
+		case *sqlparser.IsExpr:
+			walk(n.Expr)
+		case *sqlparser.NotExpr:
+			walk(n.Expr)
+		case *sqlparser.BinaryExpr:
+			walk(n.Left)
+			walk(n.Right)
+		case *sqlparser.UnaryExpr:
+			walk(n.Expr)
+			// inne typy też można dodać w razie potrzeby
+		}
+	}
+	walk(e)
+	return out
 }
 
 func trimPrefixFold(s, prefix string) string {
@@ -791,10 +923,11 @@ func collectJoins(te sqlparser.TableExpr, dst map[string]JoinPart) {
 		if key != "" {
 			joinCounter++
 			dst[key] = JoinPart{
-				Alias:     key,
-				JoinText:  joinStr,
-				DependsOn: strings.ToLower(leftAlias),
-				Order:     joinCounter,
+				Alias:      key,
+				JoinText:   normalizePlaceholders(joinStr),
+				DependsOn:  strings.ToLower(leftAlias),
+				Order:      joinCounter,
+				ParamCount: countPlaceholders(normalizePlaceholders(joinStr)),
 			}
 		}
 
@@ -843,6 +976,12 @@ func sortedKeys(m map[string]JoinPart) []string {
 	}
 	sort.Strings(ks)
 	return ks
+}
+
+var reParam = regexp.MustCompile(`:\w+`)
+
+func normalizePlaceholders(s string) string {
+	return reParam.ReplaceAllString(s, "?")
 }
 
 var logFile = "/tmp/sqlc-plugin.log"

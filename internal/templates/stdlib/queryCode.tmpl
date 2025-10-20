@@ -100,21 +100,22 @@ var {{.MethodName}}LightAST_Helper = dynamic.QueryLightAST{
             JoinText:  {{ printf "%q" $v.JoinText }},
             DependsOn: {{ printf "%q" $v.DependsOn }},
             Order: {{ printf "%v" $v.Order }},
+            ParamCount: {{ printf "%v" $v.ParamCount }},
         },
         {{- end }}
     },
     Where:      {{ printf "%q" .QueryToCountParts.Where }},
-    WhereCount: {{ .QueryToCountParts.WhereCount }},
+    WhereParamCount: {{ .QueryToCountParts.WhereParamCount }},
     GroupBy:    {{ printf "%q" .QueryToCountParts.GroupBy }},
-    GroupByCount: {{ .QueryToCountParts.GroupByCount }},
+    GroupByParamCount: {{ .QueryToCountParts.GroupByParamCount }},
     Having:     {{ printf "%q" .QueryToCountParts.Having }},
-    HavingCount: {{ .QueryToCountParts.HavingCount }},
+    HavingParamCount: {{ .QueryToCountParts.HavingParamCount }},
     OrderBy:    {{ printf "%q" .QueryToCountParts.OrderBy }},
-    OrderByCount: {{ .QueryToCountParts.OrderByCount }},
+    OrderByParamCount: {{ .QueryToCountParts.OrderByParamCount }},
     Limit:      {{ printf "%q" .QueryToCountParts.Limit }},
-    LimitCount: {{ .QueryToCountParts.LimitCount }},
+    LimitParamCount: {{ .QueryToCountParts.LimitParamCount }},
     Offset:     {{ printf "%q" .QueryToCountParts.Offset }},
-    OffsetCount: {{ .QueryToCountParts.OffsetCount }},
+    OffsetParamCount: {{ .QueryToCountParts.OffsetParamCount }},
     Meta: map[string]string{
         {{- range $k, $v := .QueryToCountParts.Meta }}
         {{ printf "%q" $k }}: {{ printf "%q" $v }},
@@ -137,6 +138,12 @@ func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *g
 		if ok || !strings.HasPrefix(join.JoinText, "LEFT ") {
 			if _, exists := query.Joins[name]; !exists {
 				query.Joins[name] = join
+                if( join.DependsOn != "" ) {
+                    // also include the join it depends on
+                    if depJoin, exists := {{.MethodName}}LightAST_Helper.Joins[join.DependsOn]; exists {
+                        query.Joins[join.DependsOn] = depJoin
+                    }
+                }
 			}
 		}
 	}
