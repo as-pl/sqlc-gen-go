@@ -634,7 +634,7 @@ func ParseQueryToCountParts(raw string) (QueryLightAST, error) {
 		switch e := expr.(type) {
 		case *sqlparser.AliasedExpr:
 			if e.As.String() != "" {
-				out.Select = append(out.Select, sqlparser.String(e.Expr)+" AS "+e.As.String())
+				out.Select = append(out.Select, sqlparser.String(e.Expr)+" AS "+fmt.Sprintf("`%s`", e.As.String()))
 			} else {
 				out.Select = append(out.Select, sqlparser.String(e.Expr))
 			}
