@@ -100,6 +100,7 @@ var {{.MethodName}}LightAST_Helper = dynamic.QueryLightAST{
             JoinText:  {{ printf "%q" $v.JoinText }},
             DependsOn: {{ printf "%q" $v.DependsOn }},
             Order: {{ printf "%v" $v.Order }},
+            Active: true,
             ParamCount: {{ printf "%v" $v.ParamCount }},
         },
         {{- end }}
@@ -129,23 +130,32 @@ func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *g
 	
 
     query := {{.MethodName}}LightAST_Helper.Clone()
-	query.Select = []string{"count(*) AS count"}
+
+    {{- $limitVal := (index .QueryToCountParts.Meta "count-limit") -}}
+    {{- if $limitVal }}
+        query.Select = []string{"1"}
+		conditions = conditions.Limit({{$limitVal}})
+    {{- else }}
+        query.Select = []string{"count(*) AS count"}
+    {{- end }}
 
 	aliases := dynamic.ExtractAliasesFromWhere(sqlStr)
-	query.Joins = map[string]dynamic.JoinPart{}
-	for name, join := range {{.MethodName}}LightAST_Helper.Joins {
+	
+	for name, join := range query.Joins {
 		ok := slices.Contains(aliases, name)
 		if ok || !strings.HasPrefix(join.JoinText, "LEFT ") {
-			if _, exists := query.Joins[name]; !exists {
-				query.Joins[name] = join
-                if( join.DependsOn != "" ) {
-                    // also include the join it depends on
-                    if depJoin, exists := {{.MethodName}}LightAST_Helper.Joins[join.DependsOn]; exists {
-                        query.Joins[join.DependsOn] = depJoin
-                    }
-                }
+
+			join.Active = true
+			if join.DependsOn != "" {
+				// also include the join it depends on
+				depJoin := query.Joins[join.DependsOn]
+				depJoin.Active = true
+				query.Joins[join.DependsOn] = depJoin
 			}
+		} else {
+			join.Active = false
 		}
+		query.Joins[name] = join
 	}
 
     query.Meta["isCountQuery"] = "true"
