@@ -351,8 +351,8 @@ func (i *importer) queryImports(filename string) fileImports {
 			pkg[ImportSpec{Path: "as-pl.com/common/db/dynamic"}] = struct{}{}
 			std["database/sql"] = struct{}{}
 			//std["errors"] = struct{}{}
-			std["slices"] = struct{}{}
-			std["strings"] = struct{}{}
+			//std["slices"] = struct{}{}
+			//std["strings"] = struct{}{}
 			//xx 11234434334323333333333311
 		}
 	}

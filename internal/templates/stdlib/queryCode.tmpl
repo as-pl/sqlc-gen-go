@@ -140,23 +140,10 @@ func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *g
     {{- end }}
 
 	aliases := dynamic.ExtractAliasesFromWhere(sqlStr)
+    aliasesFromWhere := dynamic.ExtractAliasesFromWhere("WHERE " + query.Where)
+	aliases = append(aliases, aliasesFromWhere...)
 	
-	for name, join := range query.Joins {
-		ok := slices.Contains(aliases, name)
-		if ok || !strings.HasPrefix(join.JoinText, "LEFT ") {
-
-			join.Active = true
-			if join.DependsOn != "" {
-				// also include the join it depends on
-				depJoin := query.Joins[join.DependsOn]
-				depJoin.Active = true
-				query.Joins[join.DependsOn] = depJoin
-			}
-		} else {
-			join.Active = false
-		}
-		query.Joins[name] = join
-	}
+	query.ActivateUsedJoins(aliases)
 
     query.Meta["isCountQuery"] = "true"
 	r, err := dynamic.DynamicQueryFromLightAST[ {{if ne .Arg.Name ""}}{{.Arg.Type}}{{else}}struct{}{{end}}, int64](
