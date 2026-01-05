@@ -97,7 +97,8 @@ func buildStructs(req *plugin.GenerateRequest, options *opts.Options) []Struct {
 				if options.EmitJsonTags {
 					tags["json"] = JSONTagName(column.Name, options)
 				}
-				tags["col_real_name"] = "table." + column.Name + "." + StructName(column.Name, options)
+				// Table structs don't have a query alias; emit an unqualified identifier that is still usable in simple queries.
+				tags["real_name"] = column.Name
 				addExtraGoStructTags(tags, req, options, column)
 				s.Fields = append(s.Fields, Field{
 					Name:    StructName(column.Name, options),
@@ -315,23 +316,27 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 			var gs *Struct
 			var emit bool
 
-			for _, s := range structs {
-				if len(s.Fields) != len(query.Columns) {
-					continue
-				}
-				same := true
-				for i, f := range s.Fields {
-					c := query.Columns[i]
-					sameName := f.Name == StructName(columnName(c, i), options)
-					sameType := f.Type == goType(req, options, c)
-					sameTable := sdk.SameTableName(c.Table, s.Table, req.Catalog.DefaultSchema)
-					if !sameName || !sameType || !sameTable {
-						same = false
+			// For dynamic queries we need per-query `real_name` tags (with aliases).
+			// Reusing a table model struct loses that information (e.g. when the SQL uses `SELECT *`).
+			if !isDynamic {
+				for _, s := range structs {
+					if len(s.Fields) != len(query.Columns) {
+						continue
 					}
-				}
-				if same {
-					gs = &s
-					break
+					same := true
+					for i, f := range s.Fields {
+						c := query.Columns[i]
+						sameName := f.Name == StructName(columnName(c, i), options)
+						sameType := f.Type == goType(req, options, c)
+						sameTable := sdk.SameTableName(c.Table, s.Table, req.Catalog.DefaultSchema)
+						if !sameName || !sameType || !sameTable {
+							same = false
+						}
+					}
+					if same {
+						gs = &s
+						break
+					}
 				}
 			}
 
