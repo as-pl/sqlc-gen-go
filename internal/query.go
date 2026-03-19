@@ -260,6 +260,7 @@ type JoinPart struct {
 	DependsOn  string // alias z lewej strony, na którym ten join się opiera (np. "o")
 	Order      int    // wewnętrzne, do sortowania joinów wg zależności
 	ParamCount int    // liczba parametrów w JoinText
+	Required   bool   // czy join musi zostać zachowany przy składaniu count query
 }
 
 type ColumnMeta struct {

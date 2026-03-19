@@ -247,6 +247,9 @@ func buildQueries(req *plugin.GenerateRequest, options *opts.Options, structs []
 			if err != nil {
 				return nil, err
 			}
+			if err := applyRequiredJoins(&parsed, commentsMap["required-joins"], query.Name); err != nil {
+				return nil, err
+			}
 			parsed.Meta = commentsMap
 		}
 
@@ -723,6 +726,44 @@ func ParseQueryToCountParts(raw string) (QueryLightAST, error) {
 	}
 
 	return out, nil
+}
+
+func applyRequiredJoins(parsed *QueryLightAST, raw string, queryName string) error {
+	requiredAliases := parseRequiredJoinAliases(raw)
+	for _, alias := range requiredAliases {
+		join, ok := parsed.Joins[alias]
+		if !ok {
+			return fmt.Errorf("query %s: required-joins references unknown alias %q", queryName, alias)
+		}
+		join.Required = true
+		parsed.Joins[alias] = join
+	}
+
+	return nil
+}
+
+func parseRequiredJoinAliases(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	aliases := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+
+	for _, part := range parts {
+		alias := strings.ToLower(strings.TrimSpace(part))
+		if alias == "" {
+			continue
+		}
+		if _, ok := seen[alias]; ok {
+			continue
+		}
+		seen[alias] = struct{}{}
+		aliases = append(aliases, alias)
+	}
+
+	return aliases
 }
 
 func collectJoinsWithDeps(te sqlparser.TableExpr, dst map[string]JoinPart, baseAlias string) {

@@ -8,11 +8,22 @@ import (
 	"github.com/sqlc-dev/sqlc-gen-go/internal/opts"
 )
 
+func testOptions() *opts.Options {
+	return &opts.Options{
+		EmitDbTags:          true,
+		EmitJsonTags:        false,
+		EmitSqlAsComment:    false,
+		EmitExportedQueries: true,
+		InitialismsMap:      map[string]struct{}{"id": {}},
+		QueryParameterLimit: func() *int32 { v := int32(1); return &v }(),
+	}
+}
+
 func TestBuildStructs_TableStructEmitsRealName(t *testing.T) {
 	options := &opts.Options{
-		EmitDbTags:      true,
-		EmitJsonTags:    false,
-		InitialismsMap:  map[string]struct{}{"id": {}},
+		EmitDbTags:          true,
+		EmitJsonTags:        false,
+		InitialismsMap:      map[string]struct{}{"id": {}},
 		QueryParameterLimit: func() *int32 { v := int32(1); return &v }(),
 	}
 
@@ -58,14 +69,7 @@ func TestBuildStructs_TableStructEmitsRealName(t *testing.T) {
 }
 
 func TestBuildQueries_DynamicDoesNotReuseModelStruct(t *testing.T) {
-	options := &opts.Options{
-		EmitDbTags:      true,
-		EmitJsonTags:    false,
-		EmitSqlAsComment: false,
-		EmitExportedQueries: true,
-		InitialismsMap:  map[string]struct{}{"id": {}},
-		QueryParameterLimit: func() *int32 { v := int32(1); return &v }(),
-	}
+	options := testOptions()
 
 	tableID := &plugin.Identifier{Schema: "as_db_atlas", Name: "comm_mailer_queue"}
 	model := Struct{
@@ -128,3 +132,63 @@ func TestBuildQueries_DynamicDoesNotReuseModelStruct(t *testing.T) {
 	}
 }
 
+func TestBuildQueries_DynamicMarksRequiredJoins(t *testing.T) {
+	options := testOptions()
+
+	q := &plugin.Query{
+		Name: "GetHistory",
+		Cmd:  metadata.CmdMany,
+		Text: "SELECT d.id, u.login, sp.name FROM erp_quality_pz_dimmensions d JOIN access_user u ON d.user_id = u.id JOIN shop_properties sp ON d.property_id = sp.id WHERE d.product_name = ?",
+		Columns: []*plugin.Column{
+			{
+				Name:         "id",
+				OriginalName: "id",
+				NotNull:      true,
+				Table:        &plugin.Identifier{Schema: "as_db_atlas", Name: "erp_quality_pz_dimmensions"},
+				Type:         &plugin.Identifier{Name: "int"},
+			},
+		},
+		Comments: []string{"dynamic", "required-joins: u, sp"},
+	}
+
+	req := &plugin.GenerateRequest{
+		Settings: &plugin.Settings{Engine: "mysql"},
+		Catalog:  &plugin.Catalog{DefaultSchema: "as_db_atlas"},
+		Queries:  []*plugin.Query{q},
+	}
+
+	queries, err := buildQueries(req, options, nil)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+
+	joins := queries[0].QueryToCountParts.Joins
+	if !joins["u"].Required {
+		t.Fatalf("expected join u to be required")
+	}
+	if !joins["sp"].Required {
+		t.Fatalf("expected join sp to be required")
+	}
+}
+
+func TestBuildQueries_DynamicRejectsUnknownRequiredJoin(t *testing.T) {
+	options := testOptions()
+
+	q := &plugin.Query{
+		Name:     "GetHistory",
+		Cmd:      metadata.CmdMany,
+		Text:     "SELECT d.id FROM erp_quality_pz_dimmensions d JOIN access_user u ON d.user_id = u.id",
+		Columns:  []*plugin.Column{},
+		Comments: []string{"dynamic", "required-joins: missing"},
+	}
+
+	req := &plugin.GenerateRequest{
+		Settings: &plugin.Settings{Engine: "mysql"},
+		Catalog:  &plugin.Catalog{DefaultSchema: "as_db_atlas"},
+		Queries:  []*plugin.Query{q},
+	}
+
+	if _, err := buildQueries(req, options, nil); err == nil {
+		t.Fatalf("expected error for unknown required join alias")
+	}
+}

@@ -101,6 +101,7 @@ var {{.MethodName}}LightAST_Helper = dynamic.QueryLightAST{
             DependsOn: {{ printf "%q" $v.DependsOn }},
             Order: {{ printf "%v" $v.Order }},
             Active: true,
+            Required: {{ printf "%t" $v.Required }},
             ParamCount: {{ printf "%v" $v.ParamCount }},
         },
         {{- end }}
@@ -143,7 +144,7 @@ func (q *Queries) {{.MethodName}}DynamicCount(ctx context.Context, conditions *g
     aliasesFromWhere := dynamic.ExtractAliasesFromWhere("WHERE " + query.Where)
 	aliases = append(aliases, aliasesFromWhere...)
 	
-	query.ActivateUsedJoins(aliases)
+	query.ActivateRequiredAndUsedJoins(aliases)
 
     query.Meta["isCountQuery"] = "true"
 	r, err := dynamic.DynamicQueryFromLightAST[ {{if ne .Arg.Name ""}}{{.Arg.Type}}{{else}}struct{}{{end}}, int64](
